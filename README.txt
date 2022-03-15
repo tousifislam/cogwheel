@@ -1,3 +1,5 @@
+New branch for distance marginalization + intrinsic/extrinsic sampling differently
+
 Last Update: 2022-01-07
 
 Conda enviroment setup:
