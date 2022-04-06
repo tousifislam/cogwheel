@@ -47,7 +47,7 @@ class Posterior(utils.JSONMixin):
             likelihood computation.
         """
         if set(prior.standard_params) != set(
-                likelihood.waveform_generator.params):
+                likelihood.params):# likelihood.waveform_generator.params
             raise PosteriorError('The prior and likelihood instances passed '
                                  'have incompatible parameters.')
 
@@ -79,7 +79,7 @@ class Posterior(utils.JSONMixin):
     def from_event(cls, event, approximant, prior_class, fbin=None,
                    pn_phase_tol=.05, disable_precession=False,
                    harmonic_modes=None, tolerance_params=None, seed=0,
-                   tc_rng=(-.1, .1), **kwargs):
+                   tc_rng=(-.1, .1), likelihood_class=RelativeBinningLikelihood, **kwargs):
         """
         Instantiate a `Posterior` class from the strain data.
         Automatically find a good fit solution for relative binning.
@@ -142,7 +142,7 @@ class Posterior(utils.JSONMixin):
         waveform_generator = waveform.WaveformGenerator(
             event_data.detector_names, event_data.tgps, event_data.tcoarse,
             approximant, bestfit['f_ref'], harmonic_modes, disable_precession)
-        likelihood = RelativeBinningLikelihood(
+        likelihood = likelihood_class(
             event_data, waveform_generator, bestfit['par_dic'], fbin,
             pn_phase_tol, tolerance_params)
         assert likelihood._lnl_0 > 0
@@ -154,8 +154,8 @@ class Posterior(utils.JSONMixin):
 
         # Initialize posterior and do second search:
         posterior = cls(prior, likelihood)
-        posterior.refine_reference_waveform(seed)
-        return posterior
+        ## posterior.refine_reference_waveform(seed)  
+        return posterior 
 
     def refine_reference_waveform(self, seed=None):
         """

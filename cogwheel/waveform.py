@@ -35,7 +35,9 @@ class Approximant:
 
 
 Approximant('IMRPhenomD', [(2, 2)], True, False)
-Approximant('IMRPhenomXPHM', [(2, 2), (2, 1), (3, 3), (3, 2), (4, 4)], False,
+#Approximant('IMRPhenomXPHM', [(2, 2), (2, 1), (3, 3), (3, 2), (4, 4)], False,
+#            False)
+Approximant('IMRPhenomXPHM', [(2, 2)], False,
             False)
 
 
@@ -135,7 +137,7 @@ class WaveformGenerator(utils.JSONMixin):
                      'psi', 'ra', 's1x', 's1y', 's1z', 's2x', 's2y', 's2z',
                      't_geocenter', 'vphi'])
 
-    fast_params = sorted(['d_luminosity', 'dec', 'psi', 'ra', 't_geocenter'])
+    fast_params = sorted(['d_luminosity', 'dec', 'psi', 'ra', 't_geocenter', 'vphi'])
     slow_params = sorted(set(params) - set(fast_params))
 
     _projection_params = sorted(['dec', 'psi', 'ra', 't_geocenter'])
