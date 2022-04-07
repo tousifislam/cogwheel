@@ -47,8 +47,8 @@ def get_distance_phase_point_for_given_U_T2(UT2samples, U, T2):
     cdf = np.cumsum(like_vals)
     cdf = cdf/cdf[-1]
     u_pick = cs.rand_choice_nb(u_vals, cdf, 1)[0] # cs.rand_choise_nb is faster than numpy.random.choice()
-    # note: fiducial value for dist_ref is 1Mpc; following equation is valid for that
-    dist_pick = 1/ u_pick 
+    # note: fiducial value for dist_ref is 1Mpc; the following equation is valid for that
+    dist_pick = 1/u_pick
 
     mean = np.angle(U)/2 # expected mean for phase
     sigma = 1/np.sqrt(abs(U)*u_pick) # expected sigma for the d_phase
@@ -66,11 +66,11 @@ def get_distance_phase_point_for_given_U_T2(UT2samples, U, T2):
     return dist_pick, phi_pick
 
 
-
 def sample_extrinsic_params(intrinsic_samples, post):
     """
     Wrapper to sample all extrinsic params
-    returns a dictionary of all intrinsic and extrinsic samples
+    returns a dictionary of all intrinsic and extrinsic samples, and
+    the log of the unmarginalized likelihood for the set of samples
     """
 
     print('finding the corresponding extrinsic params now')
@@ -90,19 +90,31 @@ def sample_extrinsic_params(intrinsic_samples, post):
     samples['dec'] = np.zeros(len(samples['mchirp']))
     samples['dist'] = np.zeros(len(samples['mchirp']))
     samples['phase'] = np.zeros(len(samples['mchirp']))
+    samples['lnlike'] = np.zeros(len(samples['mchirp']))
 
     # compute mu, psi, ra, dec, dist, phase in loops
     count=0
 
     for iteration in range(len(samples['mchirp'])):
         # get mu, psi, ra, dec
-        _, samples['mu'][count], samples['psi'][count], samples['ra'][count], samples['dec'][count], U, T2, UT2samples \
-                        = post.likelihood.obtain_sky_loc_params_from_cs(post.prior.transform(mchirp=intrinsic_samples['mchirp'][iteration],\
-                                                                                             lnq=intrinsic_samples['lnq'][iteration],\
-                                                                                             chieff=intrinsic_samples['chieff'][iteration],\
-                                                                                            cumchidiff=intrinsic_samples['cumchidiff'][iteration])) 
+        _, samples['mu'][count], samples['psi'][count], samples['ra'][count], \
+            samples['dec'][count], U, T2, UT2samples, _ = \
+            post.likelihood.obtain_sky_loc_params_from_cs(
+                post.prior.transform(
+                    mchirp=intrinsic_samples['mchirp'][iteration],
+                    lnq=intrinsic_samples['lnq'][iteration],
+                    chieff=intrinsic_samples['chieff'][iteration],
+                    cumchidiff=intrinsic_samples['cumchidiff'][iteration]))
+
         # get distance and phase
-        samples['dist'][count], samples['phase'][count] = get_distance_phase_point_for_given_U_T2(UT2samples, U, T2)
+        samples['dist'][count], samples['phase'][count] = \
+            get_distance_phase_point_for_given_U_T2(UT2samples, U, T2)
+        # note: fiducial value for dist_ref is 1Mpc; the following equation is valid for that
+        Y_pick = (1/samples['dist'][count]) * \
+            np.exp(-2 * 1j * samples['phase'][count])
+        samples['lnlike'][count] = 0.5 * (
+                np.abs(U)**2/T2 - T2*np.abs(Y_pick - U/T2)**2)
+
         # increase count
         count = count + 1
 

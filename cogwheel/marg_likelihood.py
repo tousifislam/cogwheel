@@ -20,7 +20,7 @@ from . likelihood import RelativeBinningLikelihood
     
 import sys
 sys.path.append('/data/tislam/works/KITP/repos/fast_pe_using_cs/')
-DEFAULT_CS_FNAME =  '/data/tislam/works/KITP/example_files_O3a/dense_RA_dec_grid_H1_L1_32768_1136574828.npz' #'/data/tislam/works/KITP/example_files_O3a/RA_dec_grid_H1_L1_32768_1136574828.npz'
+DEFAULT_CS_FNAME = '/data/tislam/works/KITP/example_files_O3a/dense_RA_dec_grid_H1_L1_32768_1136574828.npz' #'/data/tislam/works/KITP/example_files_O3a/RA_dec_grid_H1_L1_32768_1136574828.npz'
 import coherent_score_mz_fast_tousif as cs
 # cs_obj = cs.CoherentScoreMZ()
 import lal
@@ -94,13 +94,11 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
 
         self.timestamps = NotImplemented  # TODO
 
-        
     def get_z_timeseries(self, par_dic):
         """
         Return (d|h)/sqrt(h|h) timeseries, with asd_drift correction
         applied.
         """
-        
         h_fbin, _ = self.waveform_generator.get_hplus_hcross(self.fbin, par_dic|self.ref_pardict)
         
         # Sum over f axis, leave det and time axes unsummed.
@@ -109,7 +107,6 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         norm_h = np.sqrt(h_h)
         
         return d_h / norm_h / self.asd_drift, norm_h
-
 
     def lnlike(self, par_dic, **_kwargs):
         """
@@ -138,14 +135,14 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         z_timeseries_cs[:,:,2] = np.transpose(z_timeseries.imag)
               
         # 2) call the coherent score(z(t))
-        prior_terms, _, _, samples_all,  UT2samples = self.cs_obj.get_all_prior_terms_with_samp(event_phys, timeseries=z_timeseries_cs, nsamples=10000)
+        prior_terms, *_ = self.cs_obj.get_all_prior_terms_with_samp(
+                event_phys, timeseries=z_timeseries_cs, nsamples=10000)
         
         # coherent score is the marginalized likelihood
         coherent_score = prior_terms[0][0]
     
         return coherent_score #, mu, psi, ra, dec, U, T2
-    
-    
+
     def obtain_sky_loc_params_from_cs(self, par_dic, **_kwargs):
         """
         given a set of intrinsic params (Mc,q,chieff, cumchidif)
@@ -174,27 +171,28 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         z_timeseries_cs[:,:,2] = np.transpose(z_timeseries.imag)
               
         # 2) call the coherent score(z(t))
-        prior_terms, _, _, samples_all,  UT2samples = self.cs_obj.get_all_prior_terms_with_samp(event_phys, timeseries=z_timeseries_cs, nra=1000, ndec=1000, nsamples=100000)
+        prior_terms, _, _, samples_all, UT2samples = \
+            self.cs_obj.get_all_prior_terms_with_samp(
+                event_phys, timeseries=z_timeseries_cs, nra=1000, ndec=1000, nsamples=100000)
         
         # choose one point for mu,psi,ra,dec from the distributions
-        cweights = np.cumsum(samples_all[0][:,4])
-        cweights /= cweights[-1] 
-        indx_rand = cs.rand_choice_nb(np.arange(len(samples_all[0][:,4])), cweights, 1)
+        cweights = np.cumsum(samples_all[0][:, 4])
+        cweights /= cweights[-1]
+        indx_rand = cs.rand_choice_nb(np.arange(len(samples_all[0][:, 4])), cweights, 1)
         mu = samples_all[0][:,0][indx_rand]
         psi = samples_all[0][:,1][indx_rand]
         dec_all = self.cs_obj.dec_grid[samples_all[0][:,3].astype(int)]
         dec = dec_all[indx_rand]
         dra = (lal.GreenwichMeanSiderealTime(self.event_data.tgps) - lal.GreenwichMeanSiderealTime(1136574828.0))
-        ra_all = (self.cs_obj.ra_grid[samples_all[0][:,2].astype(int)] + dra)%(2*np.pi)
+        ra_all = (self.cs_obj.ra_grid[samples_all[0][:, 2].astype(int)] + dra) % (2*np.pi)
         ra = ra_all[indx_rand]
         
-        H_time = samples_all[0][:,5][indx_rand]
-        marg_lk = samples_all[0][:,6][indx_rand]
+        H_time = samples_all[0][:, 5][indx_rand]
         
         # get corresponing value for U and T2
-        U, T2 = UT2samples[:,indx_rand]
-        T2 = T2.real        
+        U, T2 = UT2samples[:, indx_rand]
+        T2 = T2.real
         coherent_score = prior_terms[0][0]
         
-        return coherent_score, mu[0], psi[0], ra[0], dec[0], U[0], T2[0], UT2samples, H_time, marg_lk
+        return coherent_score, mu[0], psi[0], ra[0], dec[0], U[0], T2[0], UT2samples, H_time
    
