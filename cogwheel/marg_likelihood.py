@@ -148,6 +148,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         given a set of intrinsic params (Mc,q,chieff, cumchidif)
         this funciton calls to coherent score code to compute coherent score 
         and picks a particular value for [mu,psi,ra,dec,U,T2]
+        TODO: Use fixed values inside
         """
         # 1) get z timeseries: (time x det)
         z_timeseries, norm_h = self.get_z_timeseries(par_dic)
