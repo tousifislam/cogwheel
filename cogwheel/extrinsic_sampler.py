@@ -111,7 +111,7 @@ def sample_extrinsic_params(intrinsic_samples, post):
             get_distance_phase_point_for_given_U_T2(UT2samples, U, T2)
         # note: fiducial value for dist_ref is 1Mpc; the following equation is valid for that
         Y_pick = (1/samples['dist'][count]) * \
-            np.exp(-2 * 1j * samples['phase'][count])
+            np.exp(2 * 1j * samples['phase'][count])
         samples['lnlike'][count] = 0.5 * (
                 np.abs(U)**2/T2 - T2*np.abs(Y_pick - U/T2)**2)
 
