@@ -117,7 +117,22 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         z_timeseries, norm_h = self.get_z_timeseries(par_dic)
 
         # slice data segement that contains the event
-        t_indices = np.argmax( np.real(z_timeseries)**2 + np.imag(z_timeseries)**2, axis=0 )
+        fixed_pars = _kwargs.get("fixed_pars", None)
+        fixed_vals = _kwargs.get("fixed_vals", None)
+        fixing = fixed_pars is not None
+
+        t_indices = np.zeros(len(z_timeseries)[0], dtype=np.int32)
+        for ind_det in range(len(t_indices)):
+            tnstr = 't' + str(ind_det)
+            if fixing and (tnstr in fixed_pars):
+                tnind = fixed_pars.index(tnstr)
+                tn = fixed_vals[tnind]
+                t_indices[ind_det] = np.searchsorted(self.timeshifts, tn)
+            else:
+                t_indices[ind_det] = np.argmax(
+                    np.real(z_timeseries[:, ind_det])**2 +
+                    np.imag(z_timeseries[:, ind_det])**2)
+        # t_indices = np.argmax( np.real(z_timeseries)**2 + np.imag(z_timeseries)**2, axis=0 )
         
         # create a pc list
         event_phys = np.zeros((len(self.event_data.detector_names), 7))
@@ -136,7 +151,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
               
         # 2) call the coherent score(z(t))
         prior_terms, *_ = self.cs_obj.get_all_prior_terms_with_samp(
-                event_phys, timeseries=z_timeseries_cs, nsamples=10000)
+                event_phys, timeseries=z_timeseries_cs, nsamples=10000,
+                fixed_pars=fixed_pars, fixed_vals=fixed_vals)
         
         # coherent score is the marginalized likelihood
         coherent_score = prior_terms[0][0]
@@ -146,7 +162,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
     def obtain_sky_loc_params_from_cs(self, par_dic, **_kwargs):
         """
         given a set of intrinsic params (Mc,q,chieff, cumchidif)
-        this funciton calls to coherent score code to compute coherent score 
+        this function calls to coherent score code to compute coherent score
         and picks a particular value for [mu,psi,ra,dec,U,T2]
         TODO: Use fixed values inside
         """
@@ -154,7 +170,22 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         z_timeseries, norm_h = self.get_z_timeseries(par_dic)
 
         # slice data segement that contains the event
-        t_indices = np.argmax( np.real(z_timeseries)**2 + np.imag(z_timeseries)**2, axis=0 )
+        fixed_pars = _kwargs.get("fixed_pars", None)
+        fixed_vals = _kwargs.get("fixed_vals", None)
+        fixing = fixed_pars is not None
+
+        t_indices = np.zeros(len(z_timeseries)[0], dtype=np.int32)
+        for ind_det in range(len(t_indices)):
+            tnstr = 't' + str(ind_det)
+            if fixing and (tnstr in fixed_pars):
+                tnind = fixed_pars.index(tnstr)
+                tn = fixed_vals[tnind]
+                t_indices[ind_det] = np.searchsorted(self.timeshifts, tn)
+            else:
+                t_indices[ind_det] = np.argmax(
+                    np.real(z_timeseries[:, ind_det])**2 +
+                    np.imag(z_timeseries[:, ind_det])**2)
+        # t_indices = np.argmax(np.real(z_timeseries)**2 + np.imag(z_timeseries)**2, axis=0)
         
         # create a pc list
         event_phys = np.zeros((len(self.event_data.detector_names), 7))
@@ -174,14 +205,16 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         # 2) call the coherent score(z(t))
         prior_terms, _, _, samples_all, UT2samples = \
             self.cs_obj.get_all_prior_terms_with_samp(
-                event_phys, timeseries=z_timeseries_cs, nra=1000, ndec=1000, nsamples=100000)
+                event_phys, timeseries=z_timeseries_cs,
+                nra=1000, ndec=1000, nsamples=100000,
+                fixed_pars=fixed_pars, fixed_vals=fixed_vals)
         
         # choose one point for mu,psi,ra,dec from the distributions
         cweights = np.cumsum(samples_all[0][:, 4])
         cweights /= cweights[-1]
         indx_rand = cs.rand_choice_nb(np.arange(len(samples_all[0][:, 4])), cweights, 1)
-        mu = samples_all[0][:,0][indx_rand]
-        psi = samples_all[0][:,1][indx_rand]
+        mu = samples_all[0][:, 0][indx_rand]
+        psi = samples_all[0][:, 1][indx_rand]
         dec_all = self.cs_obj.dec_grid[samples_all[0][:,3].astype(int)]
         dec = dec_all[indx_rand]
         dra = (lal.GreenwichMeanSiderealTime(self.event_data.tgps) - lal.GreenwichMeanSiderealTime(1136574828.0))
