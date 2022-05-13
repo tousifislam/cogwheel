@@ -117,22 +117,22 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         z_timeseries, norm_h = self.get_z_timeseries(par_dic)
 
         # slice data segement that contains the event
-        fixed_pars = _kwargs.get("fixed_pars", None)
-        fixed_vals = _kwargs.get("fixed_vals", None)
-        fixing = fixed_pars is not None
+#         fixed_pars = _kwargs.get("fixed_pars", None)
+#         fixed_vals = _kwargs.get("fixed_vals", None)
+#         fixing = fixed_pars is not None
 
-        t_indices = np.zeros(len(z_timeseries)[0], dtype=np.int32)
-        for ind_det in range(len(t_indices)):
-            tnstr = 't' + str(ind_det)
-            if fixing and (tnstr in fixed_pars):
-                tnind = fixed_pars.index(tnstr)
-                tn = fixed_vals[tnind]
-                t_indices[ind_det] = np.searchsorted(self.timeshifts, tn)
-            else:
-                t_indices[ind_det] = np.argmax(
-                    np.real(z_timeseries[:, ind_det])**2 +
-                    np.imag(z_timeseries[:, ind_det])**2)
-        # t_indices = np.argmax( np.real(z_timeseries)**2 + np.imag(z_timeseries)**2, axis=0 )
+#         t_indices = np.zeros(len(z_timeseries[0]), dtype=np.int32)
+#         for ind_det in range(len(t_indices)):
+#             tnstr = 't' + str(ind_det)
+#             if fixing and (tnstr in fixed_pars):
+#                 tnind = fixed_pars.index(tnstr)
+#                 tn = fixed_vals[tnind]
+#                 t_indices[ind_det] = np.searchsorted(self.timeshifts, tn)
+#             else:
+#                 t_indices[ind_det] = np.argmax(
+#                     np.real(z_timeseries[:, ind_det])**2 +
+#                     np.imag(z_timeseries[:, ind_det])**2)
+        t_indices = np.argmax( np.real(z_timeseries)**2 + np.imag(z_timeseries)**2, axis=0 )
         
         # create a pc list
         event_phys = np.zeros((len(self.event_data.detector_names), 7))
@@ -150,9 +150,11 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         z_timeseries_cs[:,:,2] = np.transpose(z_timeseries.imag)
               
         # 2) call the coherent score(z(t))
+#         prior_terms, *_ = self.cs_obj.get_all_prior_terms_with_samp(
+#                 event_phys, timeseries=z_timeseries_cs, nsamples=10000,
+#                 fixed_pars=fixed_pars, fixed_vals=fixed_vals)
         prior_terms, *_ = self.cs_obj.get_all_prior_terms_with_samp(
-                event_phys, timeseries=z_timeseries_cs, nsamples=10000,
-                fixed_pars=fixed_pars, fixed_vals=fixed_vals)
+                event_phys, timeseries=z_timeseries_cs, nsamples=10000)
         
         # coherent score is the marginalized likelihood
         coherent_score = prior_terms[0][0]
@@ -174,7 +176,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         fixed_vals = _kwargs.get("fixed_vals", None)
         fixing = fixed_pars is not None
 
-        t_indices = np.zeros(len(z_timeseries)[0], dtype=np.int32)
+        t_indices = np.zeros(len(z_timeseries[0]), dtype=np.int32)
         for ind_det in range(len(t_indices)):
             tnstr = 't' + str(ind_det)
             if fixing and (tnstr in fixed_pars):
@@ -222,6 +224,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         ra = ra_all[indx_rand]
         
         H_time = samples_all[0][:, 5][indx_rand]
+        
+        globals()["dic"] = locals()
         
         # get corresponing value for U and T2
         U, T2 = UT2samples[:, indx_rand]

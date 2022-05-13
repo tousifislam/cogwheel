@@ -66,7 +66,7 @@ def get_distance_phase_point_for_given_U_T2(UT2samples, U, T2):
     return dist_pick, phi_pick
 
 
-def sample_extrinsic_params(intrinsic_samples, post):
+def sample_extrinsic_params(intrinsic_samples, post, **kwargs):
     """
     Wrapper to sample all extrinsic params
     returns a dictionary of all intrinsic and extrinsic samples, and
@@ -104,7 +104,7 @@ def sample_extrinsic_params(intrinsic_samples, post):
                     mchirp=intrinsic_samples['mchirp'][iteration],
                     lnq=intrinsic_samples['lnq'][iteration],
                     chieff=intrinsic_samples['chieff'][iteration],
-                    cumchidiff=intrinsic_samples['cumchidiff'][iteration]))
+                    cumchidiff=intrinsic_samples['cumchidiff'][iteration]), **kwargs)
 
         # get distance and phase
         samples['dist'][count], samples['phase'][count] = \
