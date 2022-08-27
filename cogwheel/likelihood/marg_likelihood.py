@@ -69,7 +69,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         
         super().__init__(event_data, waveform_generator, par_dic_0, fbin,
                          pn_phase_tol, spline_degree)
-        
+
     @property
     def params(self):
         return sorted(
@@ -374,7 +374,6 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                     'phi_ref': phi_ref,
                     't_geocenter': t_geocenter})
         else:
-            # Computes ln(likelihood)
             # Note that this has discreteness errors compared to full cogwheel
             Y_pick = (self.dist_ref / d_luminosity) * np.exp(2 * 1j * phi_ref)
             lnl = (np.abs(U) ** 2 / T2 - T2 * np.abs(Y_pick - U / T2) ** 2) / 2
