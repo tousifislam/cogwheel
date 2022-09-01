@@ -41,6 +41,11 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
             Dictionary with extra parameters to pass to
             cs.CoherentScore.from_new_samples
         """
+        assert ((len(waveform_generator.harmonic_modes) == 1) and
+                (list(waveform_generator.harmonic_modes[0]) == [2, 2])), \
+            "MarginalizedRelativeBinningLikelihood only works with " \
+            "quadrupole-only waveform models"
+
         self.t_rng = t_rng
         self.dist_ref = dist_ref
         self.nsamples = nsamples
@@ -60,15 +65,24 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
 
         self.cs_obj = cs.CoherentScore.from_new_samples(
             nra, ndec, self.detnames, **cs_kwargs)
-        # From milisecond to seconds
+
+        # Convert from milliseconds to seconds
         self.dt = self.cs_obj.dt_sinc/1000
+
+        # Define array of timeshifts
         self.timeshifts = np.arange(*t_rng, self.dt)
 
+        # Define reference parameters for waveform model
         self.ref_pardict = \
             {'d_luminosity': self.dist_ref, 'iota': 0.0, 'phi_ref': 0.0}
-        
+
         super().__init__(event_data, waveform_generator, par_dic_0, fbin,
                          pn_phase_tol, spline_degree)
+        # Update parent class parameters
+        # Keep separate and don't fiddle with iota to make
+        # _get_dh_hh_no_asd_drift work
+        self._FIDUCIAL_CONFIGURATION.update(
+            {'d_luminosity': self.dist_ref, 'phi_ref': 0.0})
 
     @property
     def params(self):
@@ -89,32 +103,40 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
 
         Assuming no higher modes.
         """
-        h0_f = self._get_h_f(self.par_dic_0, by_m=False)
-        h0_fbin = self.waveform_generator.get_strain_at_detectors(
-            self.fbin, self.par_dic_0, by_m=False)  # ndet x len(fbin)
+        # Match the convention in the parent class as much as possible
+        # This ensures that self._get_h_f_interpolated works
+        # 1 x ndet x len(event_data.frequencies)
+        self._h0_f = self._get_h_f(self.par_dic_0, by_m=True)
+        self._h0_fbin = self.waveform_generator.get_strain_at_detectors(
+            self.fbin, self.par_dic_0, by_m=True)  # 1 x ndet x len(fbin)
 
         # (ntimes, ndet, nfft)
         d_h0 = (self.event_data.blued_strain *
-                np.conj(h0_f) * np.exp(
+                np.conj(self._h0_f[0]) * np.exp(
                     2j * np.pi * self.event_data.frequencies *
                     self.timeshifts[:, np.newaxis, np.newaxis]))
-        self._d_h_weights = self._get_summary_weights(d_h0) / np.conj(h0_fbin)
+        # (ntimes, ndet, len(self.fbin))
+        self._d_h_weights = \
+            self._get_summary_weights(d_h0) / np.conj(self._h0_fbin[0])
         # Add a time shift to have the peak at t=0
         # use t_gps(?)
         self._d_h_weights *= np.exp(
             1j * 2 * np.pi * self.fbin *
             (self.waveform_generator.tcoarse + self._par_dic_0['t_geocenter']))
 
-        h0_h0 = h0_f * h0_f.conj() * self.event_data.wht_filter**2
+        h0_h0 = self._h0_f[0] * self._h0_f[0].conj() * \
+            self.event_data.wht_filter**2
+        # (ndet, len(self.fbin))
         self._h_h_weights = (self._get_summary_weights(h0_h0)
-                             / (h0_fbin * h0_fbin.conj()))  # (ndet, nbin)
+                             / (self._h0_fbin[0] * self._h0_fbin[0].conj()))
 
         self.asd_drift = self.compute_asd_drift(self.par_dic_0)
-        self._lnl_0 = self.lnlike(self.par_dic_0, bypass_tests=True)
+        # self._lnl_0 = self.lnlike(self.par_dic_0, bypass_tests=True)
+        self._lnl_0 = self.lnlike_fft(self.par_dic_0)
 
         self.timestamps = NotImplemented  # TODO
 
-    def get_z_timeseries(self, par_dic):
+    def get_z_timeseries(self, par_dic, apply_asd_drift=True):
         """
         Return (d|h)/sqrt(h|h) timeseries with asd_drift correction
         applied (n_times x n_det), as well as the normfac
@@ -126,8 +148,11 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         d_h = (self._d_h_weights * h_fbin.conj()).sum(axis=-1)
         h_h = (self._h_h_weights * h_fbin * h_fbin.conj()).real.sum(axis=-1)
         norm_h = np.sqrt(h_h)
-        
-        return d_h / norm_h / self.asd_drift, norm_h
+
+        if apply_asd_drift:
+            return d_h / norm_h / self.asd_drift, norm_h
+        else:
+            return d_h / norm_h, norm_h
 
     def query_extrinsic_integrator(self, par_dic, **kwargs):
         """
@@ -135,7 +160,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         calls the extrinsic integration routine to compute the marginalized
         likelihood as well as the information needed to reconstruct samples
         of the marginalized parameters
-        :param par_dic: Dictionary of intrinsic parameters
+        :param par_dic: Dictionary of intrinsic parameters (self.params)
         :param kwargs:
             Generic variable to capture extra arguments, in this case,
             we can pass
@@ -146,6 +171,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                 nsamples = Number of samples to use for the extrinsic parameters
                     while evaluating the marginalized likelihood, defaults to
                     self.nsamples
+                apply_asd_drift = True/False
+                    (if False, asd_drifts are set to 1, defaults to True)
                 These might be useful for debugging/testing
         :return:
             1. log(marginalized likelihood)
@@ -163,7 +190,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
             5. normfacs (ndet)
         """
         # 1) get z timeseries: (time x det)
-        z_timeseries, norm_h = self.get_z_timeseries(par_dic)
+        z_timeseries, norm_h = self.get_z_timeseries(
+            par_dic, apply_asd_drift=kwargs.get("apply_asd_drift", True))
 
         # Slice data segment that contains the event
         fixed_pars = kwargs.get("fixed_pars", None)
@@ -182,6 +210,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                     utils.abs_sq(z_timeseries[:, ind_det]))
 
         # Create a processedclist for the event
+        asd_drift = self.asd_drift if kwargs.get("apply_asd_drift", True) else 1
         event_phys = np.zeros((len(self.event_data.detector_names), 7))
         # Time, SNR^2, normfac, hole correction, ASD drift, Re(z), Im(z)
         event_phys[:, 0] = self.timeshifts[t_indices]
@@ -189,7 +218,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                             for i, tind in enumerate(t_indices)]
         event_phys[:, 2] = norm_h
         event_phys[:, 3] = 1
-        event_phys[:, 4] = self.asd_drift
+        event_phys[:, 4] = asd_drift
         event_phys[:, 5] = [np.real(z_timeseries[tind, i])
                             for i, tind in enumerate(t_indices)]
         event_phys[:, 6] = [np.imag(z_timeseries[tind, i])
@@ -220,12 +249,46 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         """
         return self.query_extrinsic_integrator(par_dic, **kwargs)[0]
 
-    def lnlike_no_marginalization_from_timeseries(
-            self, z_timeseries, norm_h, par_dic):
-        """Note that par_dic is larger than the one for lnlike as it contains
-        all parameters in self.waveform_generator.params"""
+    def _get_dh_hh_by_m_polarization_from_timeseries_detector(
+            self, z_timeseries, norm_h, par_dic, apply_asd_drift=False):
+        """
+        Return ``d_h_0`` and ``h_h_0``, complex inner products for a
+        waveform ``h`` by azimuthal mode ``m`` and polarization (plus
+        and cross).
+        Useful for reusing computations when only ``psi``, ``phi_ref``
+        and/or ``d_luminosity`` change, as these parameters only affect
+        ``h`` by a scalar factor dependent on m and polarization.
+
+        Parameters
+        ----------
+        z_timeseries: (time x det)
+            output of self.get_z_timeseries (w/
+            apply_asd_drift=apply_asd_drift)[0]
+        norm_h: (det)
+            output of self.get_z_timeseries (w/
+            apply_asd_drift=apply_asd_drift)[1]
+        par_dic: dict
+            Note that par_dic is larger than the one for lnlike, as it
+            contains parameters in self.waveform_generator.params -
+            ``psi``, ``phi_ref`` and ``d_luminosity``
+        apply_asd_drift: True/False
+            (if False, asd_drifts are set to 1, defaults to True)
+
+        Return
+        ------
+        d_h: (n_m=1, 2, n_detectors) array
+            ``(d|h_mp)`` complex inner product, where ``d`` is data and
+            ``h_mp`` is the waveform with co-precessing azimuthal mode
+            ``m`` and polarization ``p`` (plus or cross).
+
+        h_h: (n_m*(n_m+1)/2=1, 2, 2, n_detectors) array
+            ``(h_mp|h_m'p')`` complex inner product.
+
+        """
+        mu = np.cos(par_dic['iota'])
+
         # Find the times in each detector to pick from the timeseries, and
-        # compute the z at that time, as well as the predicted z
+        # compute the z at that time, and the predicted z for F_+ = F_x = 1
         zs = np.zeros(len(self.detnames), dtype=np.complex128)
         ts = np.zeros(len(self.detnames), dtype=np.complex128)
         for ind_det, det in enumerate(self.detnames):
@@ -235,42 +298,128 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                 par_dic['t_geocenter'] + dt_det - self.par_dic_0['t_geocenter']
             zs[ind_det] = self.sinc_interpolation_bruteforce(
                 z_timeseries[:, ind_det], self.timeshifts, np.array([tdet]))[0]
-            ts[ind_det] = norm_h[ind_det] / self.asd_drift[ind_det] * \
-                cs.gen_sample_amps_from_fplus_fcross(
-                    *gw_utils.fplus_fcross_detector(
-                        det,
-                        par_dic['ra'],
-                        par_dic['dec'],
-                        0.0,
-                        self.event_data.tgps).T[0],
-                    np.cos(par_dic['iota']),
-                    par_dic['psi'])
+            # Note that asd_drift = 1 here
+            ts[ind_det] = norm_h[ind_det] * \
+                cs.gen_sample_amps_from_fplus_fcross(1.0, 1.0, mu, 0.0)
 
-        U = np.dot(zs, np.conj(ts))
-        T2 = utils.abs_sq(ts).sum()
+        if apply_asd_drift:
+            ts /= self.asd_drift
 
-        Y_pick = \
-            (self.dist_ref / par_dic['d_luminosity']) * \
-            np.exp(2 * 1j * par_dic['phi_ref'])
-        lnl = 0.5 * (np.abs(U) ** 2 / T2 - T2 * np.abs(Y_pick - U / T2) ** 2)
+        # Shape (n_m=1, (n_polarizations=2), n_detectors), complex
+        d_h = np.einsum(
+            'pd, d -> pd',
+            np.transpose(
+                ts.conj().view(np.float64).reshape(len(ts), -1) *
+                np.array([1., 1j])),
+            zs)[np.newaxis, :]
 
-        return lnl
+        # Shape (n_m*(n_m+1)/2=1,
+        #        (n_polarizations=2),
+        #        (n_polarizations=2),
+        #        n_detectors), complex
+        h_h = np.array([[[ts.real**2, np.zeros_like(ts)],
+                         [np.zeros_like(ts), ts.imag**2]]])
+
+        return d_h, h_h
+
+    @utils.lru_cache(maxsize=16)
+    def _get_dh_hh_by_m_polarization_detector(
+            self, par_dic_items, apply_asd_drift=False):
+        """
+        Return ``d_h_0`` and ``h_h_0``, complex inner products for a
+        waveform ``h`` by azimuthal mode ``m`` and polarization (plus
+        and cross).
+        Useful for reusing computations when only ``psi``, ``phi_ref``
+        and/or ``d_luminosity`` change, as these parameters only affect
+        ``h`` by a scalar factor dependent on m and polarization.
+
+        Parameters
+        ----------
+        par_dic_items: tuple of (key, value) tuples
+            Contents of ``par_dic``, in tuple format so that it's hashable.
+            Note that par_dic is larger than the one for lnlike as it
+            contains parameters in self.waveform_generator.params -
+            ``psi``, ``phi_ref`` and ``d_luminosity``
+        apply_asd_drift: True/False
+            (if False, asd_drifts are set to 1, defaults to False)
+
+        Return
+        ------
+        d_h: (n_m=1, 2, n_detectors) array
+            ``(d|h_mp)`` complex inner product, where ``d`` is data and
+            ``h_mp`` is the waveform with co-precessing azimuthal mode
+            ``m`` and polarization ``p`` (plus or cross).
+
+        h_h: (n_m*(n_m+1)/2=1, 2, 2, n_detectors) array
+            ``(h_mp|h_m'p')`` complex inner product.
+
+        """
+        par_dic = dict(par_dic_items)
+        # get z timeseries: (time x det)
+        z_timeseries, norm_h = self.get_z_timeseries(
+            {p: par_dic[p] for p in self.params},
+            apply_asd_drift=apply_asd_drift)
+
+        return self._get_dh_hh_by_m_polarization_from_timeseries_detector(
+            z_timeseries, norm_h, par_dic,
+            apply_asd_drift=apply_asd_drift)
+
+    def _get_dh_hh_from_timeseries(
+            self, z_timeseries, norm_h, par_dic, apply_asd_drift=True):
+        """
+        Return two arrays of length n_detectors with the values of
+        ``(d|h)``, ``(h|h)``
+
+        Parameters
+        ----------
+        z_timeseries: (time x det)
+            output of self.get_z_timeseries (w/
+            apply_asd_drift=apply_asd_drift)[0]
+        norm_h: (det)
+            output of self.get_z_timeseries (w/
+            apply_asd_drift=apply_asd_drift)[1]
+        par_dic: dict
+            Waveform parameters, Note that par_dic is larger than the one for
+            lnlike as it contains all parameters in
+            self.waveform_generator.params
+        apply_asd_drift: True/False
+            (if False, asd_drifts are set to 1, defaults to True)
+        """
+        dphi = par_dic['phi_ref'] - self.ref_pardict['phi_ref']
+        amp_ratio = self.ref_pardict['d_luminosity'] / par_dic['d_luminosity']
+        par_dic_fiducial = (
+            {par: par_dic[par]
+             for par in self.waveform_generator.polarization_params}
+            | self._FIDUCIAL_CONFIGURATION)
+        d_h_mpd, h_h_mpd = \
+            self._get_dh_hh_by_m_polarization_from_timeseries_detector(
+                z_timeseries, norm_h, par_dic_fiducial,
+                apply_asd_drift=apply_asd_drift)
+
+        m_arr = np.fromiter(self.waveform_generator._harmonic_modes_by_m, int)
+        m_inds, mprime_inds = self._get_m_mprime_inds()
+        dh_phasor = np.exp(-1j * dphi * m_arr)
+        hh_phasor = np.exp(1j * dphi * (m_arr[m_inds] - m_arr[mprime_inds]))
+
+        # fplus_fcross shape: (2, n_detectors)
+        fplus_fcross = gw_utils.fplus_fcross(
+            self.waveform_generator.detector_names,
+            par_dic['ra'], par_dic['dec'], par_dic['psi'],
+            self.waveform_generator.tgps)
+
+        d_h = amp_ratio * np.einsum('mpd, pd, m -> d',
+                                    d_h_mpd, fplus_fcross, dh_phasor).real
+        h_h = amp_ratio**2 * np.einsum(
+            'mpPd, pd, Pd, m -> d',
+            h_h_mpd, fplus_fcross, fplus_fcross, hh_phasor).real
+        return d_h, h_h
 
     def lnlike_no_marginalization(self, par_dic):
         """Note that par_dic is larger than the one for lnlike as it contains
         all parameters in self.waveform_generator.params
         """
-        # 1) get z timeseries: (time x det)
-        z_timeseries, norm_h = self.get_z_timeseries(
-            {p: par_dic[p] for p in self.params})
-
-        return self.lnlike_no_marginalization_from_timeseries(
-            z_timeseries, norm_h, par_dic)
-
-    def lnlike_detectors_no_asd_drift(self, par_dic):
-        raise NotImplementedError(
-            "MarginalizedRelativeBinningLikelihood only works with " +
-            "network-level likelihoods")
+        return \
+            self.lnlike_detectors_no_asd_drift(par_dic) @ self.asd_drift**(-2)
 
     def postprocess_samples(
             self, samples, force_update=False, accurate_lnl=False, **kwargs):
@@ -297,6 +446,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                 nsamples = Number of samples to use for the extrinsic parameters
                     while evaluating the marginalized likelihood, defaults to
                     self.nsamples
+                apply_asd_drift = True/False
+                    (if False, asd_drifts are set to 1, defaults to True)
         """
         cols_to_add = ['iota',
                        'psi',
@@ -364,7 +515,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
 
         # Evaluate the log likelihood
         if accurate_lnl:
-            lnl = self.lnlike_no_marginalization_from_timeseries(
+            d_h, h_h = self._get_dh_hh_from_timeseries(
                 z_timeseries, norm_h, par_dic | {
                     'iota': iota,
                     'psi': psi,
@@ -372,11 +523,20 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                     'dec': dec,
                     'd_luminosity': d_luminosity,
                     'phi_ref': phi_ref,
-                    't_geocenter': t_geocenter})
+                    't_geocenter': t_geocenter},
+                apply_asd_drift=kwargs.get("apply_asd_drift", True))
+            lnl = np.sum(d_h - h_h/2)
         else:
             # Note that this has discreteness errors compared to full cogwheel
-            Y_pick = (self.dist_ref / d_luminosity) * np.exp(2 * 1j * phi_ref)
-            lnl = (np.abs(U) ** 2 / T2 - T2 * np.abs(Y_pick - U / T2) ** 2) / 2
+            # Note the opposite behavior of y_pick vs the notes, this is ultimately
+            # because of lal and the waveform's convention that the positive
+            # frequency parts of the waveform go as e^{2 i \phi}, which arises
+            # because of lal's convention of measuring the phi = \pi/2 - phi
+            # measured from the line joining the masses
+            y_pick = (self.ref_pardict['d_luminosity'] / d_luminosity) * \
+                np.exp(2 * 1j * (
+                        phi_ref - self.ref_pardict['phi_ref']))
+            lnl = (np.abs(U) ** 2 / T2 - T2 * np.abs(y_pick - U / T2) ** 2) / 2
         
         return iota, psi, ra, dec, d_luminosity, phi_ref, t_geocenter, lnl
 
@@ -399,9 +559,10 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         cdf = np.cumsum(like_vals)
         cdf /= cdf[-1]
         u_pick = utils.rand_choice_nb(u_vals, cdf, 1)[0]
-        dist_pick = self.dist_ref / u_pick
+        dist_pick = self.ref_pardict['d_luminosity'] / u_pick
 
-        mean = np.angle(U) / 2  # central value for phase
+        # Central value for phase
+        mean = np.angle(U) / 2 + self.ref_pardict['phi_ref']
         sigma = 1 / np.sqrt(u_abs * u_pick)  # spread for the d_phase
         v_vals = np.linspace(
             max(-7 * sigma, -np.pi / 2), min(7 * sigma, np.pi / 2), 1000)
@@ -443,7 +604,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
     @staticmethod
     def sinc_interpolation_bruteforce(x, s, u):
         """
-        Interpolates x, sampled at "s" instants
+        Interpolates x (n_s, ....), sampled at "s" instants
         Output y is sampled at "u" instants ("u" for "upsampled")
         u has to be 1D
         Complexity len(s) x len(u)
@@ -454,7 +615,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         # Find the period
         dt = s[1] - s[0]
         sincM = np.tile(u, (len(s), 1)) - np.tile(s[:, None], (1, len(u)))
-        y = np.dot(x, np.sinc(sincM / dt))
+        y = np.dot(x.T, np.sinc(sincM / dt)).T
         return y
 
     def get_init_dict(self):

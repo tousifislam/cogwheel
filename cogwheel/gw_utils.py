@@ -33,6 +33,7 @@ DETECTOR_ARMS = {
 
 EARTH_CROSSING_TIME = 2 * 0.02128  # 2 R_Earth / c (seconds)
 
+
 @utils.lru_cache()
 def fplus_fcross(detector_names, ra, dec, psi, tgps):
     """

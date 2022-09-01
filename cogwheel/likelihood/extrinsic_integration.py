@@ -15,33 +15,7 @@ from numba import njit, vectorize
 from numpy.random import choice
 from scipy.special import i0e, i1e
 from cogwheel import utils
-
-import lal
-# create Detector dictionary
-DETMAP = {'H1': lal.LALDetectorIndexLHODIFF,
-          'H2': lal.LALDetectorIndexLHODIFF,
-          'LHO': lal.LALDetectorIndexLHODIFF,
-          'H': lal.LALDetectorIndexLHODIFF,
-          'L1': lal.LALDetectorIndexLLODIFF,
-          'LLO': lal.LALDetectorIndexLLODIFF,
-          'L': lal.LALDetectorIndexLLODIFF,
-          'G1': lal.LALDetectorIndexGEO600DIFF,
-          'GEO': lal.LALDetectorIndexGEO600DIFF,
-          'GEO600': lal.LALDetectorIndexGEO600DIFF,
-          'V1': lal.LALDetectorIndexVIRGODIFF,
-          'VIRGO': lal.LALDetectorIndexVIRGODIFF,
-          'T1': lal.LALDetectorIndexTAMA300DIFF,
-          'TAMA': lal.LALDetectorIndexTAMA300DIFF,
-          'TAMA300': lal.LALDetectorIndexTAMA300DIFF,
-          'K1': lal.LALDetectorIndexKAGRADIFF,
-          'KAGRA': lal.LALDetectorIndexKAGRADIFF,
-          'LCGT': lal.LALDetectorIndexKAGRADIFF,
-          'I1': lal.LALDetectorIndexLIODIFF,
-          'LIO': lal.LALDetectorIndexLIODIFF,
-          'E1': lal.LALDetectorIndexE1DIFF,
-          'E2': lal.LALDetectorIndexE2DIFF,
-          'E3': lal.LALDetectorIndexE3DIFF}
-
+from cogwheel import gw_utils
 
 # Useful default variables
 # Loose upper bound to travel time between any detectors in ms
@@ -94,51 +68,6 @@ LG_FAST_YP = np.asarray(
 
 
 # ############## Functions to create library of saved samples #################
-def delays(ra, dec, detectors, gps_time):
-    """
-    Computes delays in arrival times between detectors, referred to the first
-    (beyond 2 delays for most, and 3 delays for all, they're overspecified,
-    but that's OK)
-    :param ra: Right ascension (radians)
-    :param dec: Right ascension (radians)
-    :param detectors:
-        List of dectectors, specified as instances of lal.CachedDetectors
-    :param gps_time: GPS time at which the delays are computed
-    :return: 1D array of delays referred to the first detector (in s)
-    """
-    times = np.asarray([
-        lal.TimeDelayFromEarthCenter(det.location, ra, dec, gps_time)
-        for det in detectors])
-    dt = times[1:] - times[0]
-    return dt
-
-
-def phase_lags(ra, dec, detectors, gps_time):
-    """
-    Computes phase lags between detectors, referred to the first
-    (beyond 2 delays for most, and 3 delays for all, they're overspecified,
-    but that's OK)
-    :param ra: Right ascension (radians)
-    :param dec: Right ascension (radians)
-    :param detectors:
-        List of dectectors, specified as instances of lal.CachedDetectors
-    :param gps_time: GPS time at which the antenna responses are computed
-    :return: 1D array of phases referred to the first detector
-    """
-    # Greenwich mean sidereal time corresponding to the given GPS time
-    gmst = lal.GreenwichMeanSiderealTime(gps_time)
-
-    # Detector responses for phi = zero
-    fs = [lal.ComputeDetAMResponse(det.response, ra, dec, 0, gmst)
-          for det in detectors]
-
-    # Phases
-    phis = np.asarray([np.arctan2(f[1], f[0]) for f in fs])
-    # Phase differences w.r.t the first detector (H1 for H1, L1)
-    dphis = (phis[1:] - phis[0]) % (2 * np.pi)
-    return dphis
-
-
 @njit
 def dt2key(dt, dt_sinc=DEFAULT_DT, dt_max=DEFAULT_DT_MAX):
     """
@@ -163,15 +92,14 @@ def dt2key(dt, dt_sinc=DEFAULT_DT, dt_max=DEFAULT_DT_MAX):
 
 
 def create_time_dict(
-        nra, ndec, detectors, gps_time=1136574828.0, dt_sinc=DEFAULT_DT,
+        nra, ndec, detnames, gps_time=1136574828.0, dt_sinc=DEFAULT_DT,
         dt_max=DEFAULT_DT_MAX):
     """
     Creates dictionary indexed by time, giving RA-Dec pairs for montecarlo
     integration
     :param nra: number of ra points in grid
     :param ndec: number of declinations in grid
-    :param detectors:
-        List of detectors, each with a location and response as given by LAL
+    :param detnames: Tuple of detector names (e.g., ('H', 'L'))
     :param gps_time: Reference GPS time to generate the dictionary for
     :param dt_sinc:
         Size of the time binning used in ms; it must coincide with the time
@@ -194,8 +122,7 @@ def create_time_dict(
     sin_dec_grid = sin_dec_grid[1:]
     dec_grid = np.arcsin(sin_dec_grid)
 
-    # Greenwich mean sidereal time corresponding to the given GPS time
-    gmst = lal.GreenwichMeanSiderealTime(gps_time)
+    detnames = tuple(detnames)
 
     # Compute grids of response and phase difference for debugging
     # deltats contains time difference in milliseconds
@@ -208,18 +135,20 @@ def create_time_dict(
         # Delays, phase differences, vector responses, scalar responses
         arrs_ra = [[], [], [], []]
         for dec in dec_grid:
-            # Time delays in milliseconds
-            deltat = 1000 * delays(ra, dec, detectors, gps_time)
+            # Compute time delays in milliseconds wrt the first detector
+            times = gw_utils.time_delay_from_geocenter(
+                detnames, ra, dec, gps_time)
+            deltat = 1000 * (times[1:] - times[0])
             # Detector responses for phi = zero
-            fs = [lal.ComputeDetAMResponse(det.response, ra, dec, 0, gmst)
-                  for det in detectors]
+            # n_detectors x 2 array
+            fs = gw_utils.fplus_fcross(detnames, ra, dec, 0.0, gps_time).T
             # Phases
-            phis = np.asarray([np.arctan2(f[1], f[0]) for f in fs])
+            phis = np.arctan2(fs[:, 1], fs[:, 0])
             # Phase differences w.r.t the first detector (e.g., H1 for H1, L1)
+            # TODO: What happens when there is one detector?
             dphis = (phis[1:] - phis[0]) % (2 * np.pi)
             # Network responses
-            xrs = [np.linalg.norm(f) for f in fs]
-            xrtot2 = sum(xr ** 2 for xr in xrs)
+            xrtot2 = (fs**2).sum()
             arrs_ra[0].append(deltat)
             arrs_ra[1].append(dphis)
             arrs_ra[2].append(fs)
@@ -266,7 +195,7 @@ def create_samples(
         names, the sampling rate, and GPS time
     :param nra: Number of right ascensions
     :param ndec: Number of declinations
-    :param detnames: Names of detectors for the structure
+    :param detnames: Tuple of detector names (e.g., ('H', 'L'))
     :param gps_time:
         Fiducial GPS time for mapping between the RA-DEC and time delays
         (arbitrary for typical usage)
@@ -276,12 +205,10 @@ def create_samples(
         Number of random samples of the inclination and the polarization
     :return:
     """
-    # Create detectors
-    detectors = [lal.CachedDetectors[DETMAP[det]] for det in detnames]
     # Create structures to deal with the mapping of the sphere to delays
     dt_dict, ra_grid, dec_grid, responses, deltats, dphases, rtot2s = \
         create_time_dict(
-            nra, ndec, detectors, gps_time=gps_time, dt_sinc=dt_sinc,
+            nra, ndec, detnames, gps_time=gps_time, dt_sinc=dt_sinc,
             dt_max=dt_max)
     # Create random samples of the cosine of the inclination, and the
     # polarization
@@ -683,7 +610,7 @@ class CoherentScore(object):
         :param samples_fname:
             Path to file with samples, created by create_samples
         :param detnames:
-            If known, pass the list of detector names for plot labels.
+            If known, pass list/tuple of detector names for plot labels.
             If not given, we will infer it from the filename, assuming it was
             generated by create_samples
         :param norm_angles: Flag to recompute normalization w.r.t angles
@@ -723,11 +650,11 @@ class CoherentScore(object):
         # Convenience for later
         self.ndet = self.responses.shape[2]
         if detnames is not None:
-            self.detnames = detnames
+            self.detnames = tuple(detnames)
         else:
             self.detnames = \
-                samples_fname.split("RA_dec_grid_")[1].split(
-                    f"_{int(1000/self.dt_sinc)}")[0].split("_")
+                tuple(samples_fname.split("RA_dec_grid_")[1].split(
+                    f"_{int(1000/self.dt_sinc)}")[0].split("_"))
 
         # Samples of mu (cos inclination) and psis
         self.mus = npzfile['mus']
@@ -788,7 +715,7 @@ class CoherentScore(object):
         Function to create a new class instance with a dictionary from scratch
         :param nra: Number of points in the RA direction
         :param ndec: Number of points in the Dec direction
-        :param detnames: Tuple/list of detector names (e.g., ('H1', 'L1'))
+        :param detnames: Tuple of detector names (e.g., ('H', 'L'))
         :param gps_time:
         :param dt_sinc: Time resolution of samples in ms for the dictionary
         :param dt_max: Maximum delay between detectors in ms
@@ -797,13 +724,10 @@ class CoherentScore(object):
         :param run:
         :return: Instance of CoherentScoreMZ
         """
-        # Create detectors
-        detectors = [lal.CachedDetectors[DETMAP[det]] for det in detnames]
-
         # Create structures to deal with the mapping of the sphere to delays
         dt_dict, ra_grid, dec_grid, responses, deltats, dphases, rtot2s = \
             create_time_dict(
-                nra, ndec, detectors, gps_time=gps_time, dt_sinc=dt_sinc,
+                nra, ndec, detnames, gps_time=gps_time, dt_sinc=dt_sinc,
                 dt_max=dt_max)
 
         # Create random samples of the cosine of the inclination, and the

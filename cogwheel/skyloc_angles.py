@@ -9,6 +9,7 @@ import lal
 from cogwheel import utils
 from cogwheel import gw_utils
 
+
 class SkyLocAngles(utils.JSONMixin):
     """
     Class that defines a coordinate system for sky localization.

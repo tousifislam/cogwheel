@@ -163,7 +163,7 @@ class RelativeBinningLikelihood(CBCLikelihood):
 
         Return
         ------
-        d_h: (n_m, 2) array
+        d_h: (n_m, 2, n_detectors) array
             ``(d|h_mp)`` complex inner product, where ``d`` is data and
             ``h_mp`` is the waveform with co-precessing azimuthal mode
             ``m`` and polarization ``p`` (plus or cross).
@@ -187,7 +187,7 @@ class RelativeBinningLikelihood(CBCLikelihood):
         d_h = np.einsum('mdf, mpdf -> mpd',
                         self._d_h_weights, hplus_hcross_at_detectors.conj())
 
-        # Shape (n_m, 2, 2, n_detectors), complex
+        # Shape (n_m*(n_m+1)/2, 2, 2, n_detectors), complex
         m_inds, mprime_inds = self._get_m_mprime_inds()
         h_h = np.einsum('mdf, mpdf, mPdf -> mpPd', self._h_h_weights,
                         hplus_hcross_at_detectors[m_inds],
