@@ -1,4 +1,5 @@
 import numpy as np 
+from cogwheel import gw_utils
 from cogwheel.prior import Prior
 from cogwheel.gw_prior.extrinisic import ReferenceDetectorMixin
 from astropy import cosmology as cosmo
@@ -86,7 +87,7 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         this is conditioned on other extrinsic params
         """
         # build spline fit for redshift as a function of d_hat
-        spl = build_spline_for_distances(mchirp_source, lnq, d_hat, ra, dec, psi, iota)
+        spl = self.build_spline_for_distances(mchirp_source, lnq, d_hat, ra, dec, psi, iota)
         # compute redshift and luminosity distance from d_hat
         # using spline
         d_luminosity= splev(d_hat, spl)
@@ -114,7 +115,7 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         """
         to go from standard params to sampled params
         """
-        redshift = luminosity_distance_to_redshift(d_luminosity)
+        redshift = self.luminosity_distance_to_redshift(d_luminosity)
         return {'m1_source': m1 / (1+redshift) ,
                  'lnq': np.log(m2/m1),
                  'd_hat': d_luminosity / self._conversion_factor(ra, dec, psi,
