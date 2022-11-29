@@ -59,24 +59,24 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         build spline fit for redshift as a function of d_hat conditioned on mchirp and
         other extrinsic params
         """
-        # redshift ranges
+        # redshift ranges - take some fiducial values for now
         if redshift_min=None:
             redshift_min=0.01
         if redshift_max=None:
             redshift_max=1
-        # initiate redshift values
+        # initiate a grid for redshift
         redshift_grid = np.linspace(redshift_min, redshift_max, 1000) 
-        # compute respective masses
+        # compute respective detector frame masses
         mchirp_grid = mchirp_source * (1+redshift_grid)
         eta = gw_utils.q_to_eta(np.exp(lnq))
         m1_grid, m2_grid = gw_utils.mchirpeta_to_m1m2(mchirp_grid, eta)
-        # compute respective d_hat
+        # initiate a grid for d_hat
         d_hat_grid = np.linspace(range_dic['d_hat'][0], range_dic['d_hat'][1], 1000)
         # obtain d_luminosity values
         d_luminosity_grid = d_hat_grid * self._conversion_factor(ra, dec, psi,
                                                                 iota, m1_grid, m2_grid)
         # build spline
-        spl = splrep(d_hat_grid, redshift_grid)
+        spl = splrep(d_hat_grid, d_luminosity_grid)
         
         return spl
     
@@ -89,8 +89,8 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         spl = build_spline_for_distances(mchirp_source, lnq, d_hat, ra, dec, psi, iota)
         # compute redshift and luminosity distance from d_hat
         # using spline
-        d_luminosity = splev(d_hat, spl)
-        redshift = self.luminosity_distance_to_redshift(d_luminosity)
+        d_luminosity= splev(d_hat, spl)
+        redshift  = self.luminosity_distance_to_redshift(d_luminosity)
         
         raise redshift, d_luminosity
         
@@ -153,6 +153,3 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         
         return lnprior_m1 + lnprior_q + lnprior_d_hat
         
-        
-
-    
