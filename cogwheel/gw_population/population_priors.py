@@ -26,6 +26,7 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         self.ref_det_name=ref_det_name
         super().__init__(tgps=tgps, ref_det_name=ref_det_name, **kwargs)
         
+    
     def _conversion_factor(self, ra, dec, psi, iota, m1, m2):
         """
         Return conversion factor such that
@@ -34,20 +35,8 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         mchirp = gw_utils.m1m2_to_mchirp(m1, m2)
         response = np.abs(self.geometric_factor_refdet(ra, dec, psi, iota))
         return mchirp**(5/6) * response
-    
-    def mchirp_source_and_d_hat_to_redshift(self, mchirp_source, d_hat, ra, dec, psi, iota):
-        """
-        computes redshift and luminosity distances from mchirp_source and d_hat
-        this is conditioned on other extrinsic params
-        """
-        d_hat_grid = np.linspace(range_dic['d_hat'][0], range_dic['d_hat'][1], 1000)
-        d_luminosity_grid = d_hat_grid * self._conversion_factor(ra, dec, psi,
-                                                                iota, m1, m2)
-        redshift = 
-        spl = splrep(d_hat, redshift)
-        d_luminosity = splev(d_hat, spl)
-        raise NotImplementedError
 
+    
     def luminosity_distance_to_redshift(self, d_luminosity):
         """
         computes redshift from luminosity distances assuming Planck15 cosmology
@@ -55,14 +44,64 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         cosmology = cosmo.Planck15
         return cosmo.z_at_value(cosmology.luminosity_distance, d_luminosity*units.Mpc)
     
+    
+    def redshift_to_luminosity_distance(self, redshift):
+        """
+        computes luminosity distances from redshiftassuming Planck15 cosmology
+        """
+        cosmology = cosmo.Planck15
+        return cosmology.luminosity_distance(redshift).value
 
+    
+     def build_spline_for_distances(self, mchirp_source, lnq, d_hat, ra, dec, 
+                                             psi, iota, redshift_min=None, redshift_max=None):
+        """
+        build spline fit for redshift as a function of d_hat conditioned on mchirp and
+        other extrinsic params
+        """
+        # redshift ranges
+        if redshift_min=None:
+            redshift_min=0.01
+        if redshift_max=None:
+            redshift_max=1
+        # initiate redshift values
+        redshift_grid = np.linspace(redshift_min, redshift_max, 1000) 
+        # compute respective masses
+        mchirp_grid = mchirp_source * (1+redshift_grid)
+        eta = gw_utils.q_to_eta(np.exp(lnq))
+        m1_grid, m2_grid = gw_utils.mchirpeta_to_m1m2(mchirp_grid, eta)
+        # compute respective d_hat
+        d_hat_grid = np.linspace(range_dic['d_hat'][0], range_dic['d_hat'][1], 1000)
+        # obtain d_luminosity values
+        d_luminosity_grid = d_hat_grid * self._conversion_factor(ra, dec, psi,
+                                                                iota, m1_grid, m2_grid)
+        # build spline
+        spl = splrep(d_hat_grid, redshift_grid)
+        
+        return spl
+    
+    def mchirp_source_and_d_hat_to_redshift(self, mchirp_source, lnq, d_hat, ra, dec, psi, iota):
+        """
+        computes redshift and luminosity distances from mchirp_source and d_hat
+        this is conditioned on other extrinsic params
+        """
+        # build spline fit for redshift as a function of d_hat
+        spl = build_spline_for_distances(mchirp_source, lnq, d_hat, ra, dec, psi, iota)
+        # compute redshift and luminosity distance from d_hat
+        # using spline
+        d_luminosity = splev(d_hat, spl)
+        redshift = self.luminosity_distance_to_redshift(d_luminosity)
+        
+        raise redshift, d_luminosity
+        
+        
     def transform(self, m1_source, lnq, d_hat, ra, dec, psi, iota):
         """
         to go from sampled params to standard params
         """
         m2_source = m1_source * np.exp(lnq)
         mchirp_source = gw_utils.m1m2_to_mchirp(m1_source, m2_source)
-        redshift, d_luminosity = self.mchirp_source_and_d_hat_to_redshift(mchirp_source, d_hat, 
+        redshift, d_luminosity = self.mchirp_source_and_d_hat_to_redshift(mchirp_source, lnq, d_hat, 
                                                                           ra, dec, psi, iota)
         m1 = m1_source * (1+redshift)
         
@@ -70,11 +109,11 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
                 'm2': m1 * np.exp(lnq),
                 'd_luminosity': d_luminosity}
     
+    
     def inverse_transform(self, m1, m2, d_luminosity, ra, dec, psi, iota):
         """
         to go from standard params to sampled params
         """
-        raise NotImplementedError
         redshift = luminosity_distance_to_redshift(d_luminosity)
         return {'m1_source': m1 / (1+redshift) ,
                  'lnq': np.log(m2/m1),
