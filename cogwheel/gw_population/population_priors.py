@@ -14,8 +14,7 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
     reflective_params = ['lnq']
     conditioned_on = ['ra', 'dec', 'psi', 'iota']
     
-    def __init__(self, *, tgps, ref_det_name, m1_source, lnq, ra, dec, psi, iota, 
-                 m1_source_range, alpha=1.0, q_min=.05, 
+    def __init__(self, *, tgps, ref_det_name, m1_source_range, alpha=1.0, q_min=.05, 
                  d_hat_max=500., symmetrize_lnq=False,**kwargs):
         
         lnq_min = np.log(q_min)
@@ -27,11 +26,11 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         # build an inverse spline for d_luminosity and d_hat
         # for future use
         m2_source = m1_source * np.exp(lnq)
+        # some reasonable values for the distance range 
+        # - should be checked later
         d_luminosity_grid = np.linspace(1., 100000., 10000)
-        mchirp_source = gw_utils.m1m2_to_mchirp(m1_source, m2_source)
-        R_k = _response_factor(ra, dec, psi, iota)
-        d_hat_grid = self._f_of_d_luminosity(d_luminosity_grid) / (mchirp_source**(5/6) * R_k)
-        self._d_luminosity_of_d_hat = interpolate.interp1d(d_hat_grid, d_luminosity_grid)
+        f_grid = self._f_of_d_luminosity(d_luminosity_grid) 
+        self._d_luminosity_of_f = interpolate.interp1d(f_grid, d_luminosity_grid)
         
         self.tgps = tgps
         self.ref_det_name=ref_det_name
@@ -69,8 +68,13 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         """
         to go from sampled params to standard params
         """
+        
+        m2_source = m1_source * np.exp(lnq)
+        mchirp_source = gw_utils.m1m2_to_mchirp(m1_source, m2_source)
+        R_k = _response_factor(ra, dec, psi, iota)
+        func_val = d_hat * mchirp_source**(5/6) * R_k
         # use inverse spline here
-        d_luminosity = self._d_luminosity_of_d_hat(d_hat)
+        d_luminosity = self._d_luminosity_of_f(func_val)
         redshift = cosmology.z_of_d_luminosity(d_luminosity)
         m1 = m1_source * (1+redshift)
         
