@@ -91,7 +91,8 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
     
     def lnprior(self, m1_source, lnq, d_hat, ra, dec, psi, iota):
         """
-        Prior distrbution as defined in Eq(24) in https://arxiv.org/pdf/2008.07014.pdf
+        Prior distribution as defined in Eq(24) of https://arxiv.org/pdf/2008.07014.pdf
+        f (m1_source, q, chi_eff, D_L) = m1_source^alpha * D_L^2
         Truncated power-law in the primary source-frame mass m1_source.
         Uniform prior in mass ratio q and spin chi_eff.
         Power law in the luminosity distance.
