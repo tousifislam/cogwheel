@@ -1,2 +1,2 @@
 from .marg_likelihood import MarginalizedRelativeBinningLikelihood
-from .intrinsic_prior import IntrinsicParametersPrior, IntrinsicTidalPrior
+from .intrinsic_prior import IntrinsicParametersPrior, IntrinsicTidalPrior, LVKIntrinsicTidalPrior, LVKHighSpinTidalPrior

@@ -1,11 +1,28 @@
-import numpy as np 
+"""
+Custom astrophysical population priors
+"""
+import numpy as np
 from cogwheel import gw_utils, cosmology
-from cogwheel.prior import Prior
-from cogwheel.gw_prior.extrinisic import ReferenceDetectorMixin
+from cogwheel.cosmology import comoving_to_luminosity_diff_vt_ratio
+
+from cogwheel.prior import Prior, CombinedPrior
+from cogwheel.gw_prior.extrinsic import (UniformPhasePrior,
+                                        IsotropicInclinationPrior,
+                                        IsotropicSkyLocationPrior,
+                                        UniformTimePrior,
+                                        UniformPolarizationPrior,
+                                        ReferenceDetectorMixin)
+from cogwheel.gw_prior.combined import RegisteredPriorMixin
+from cogwheel.gw_prior.miscellaneous import (ZeroTidalDeformabilityPrior,
+                                             FixedReferenceFrequencyPrior)
+from cogwheel.gw_prior.spin import UniformEffectiveSpinPrior, ZeroInplaneSpinsPrior
 from scipy import interpolate
 
 class InjectionMassPrior(ReferenceDetectorMixin, Prior):
-    
+    """
+    Prior class for 
+        f(m1_source, q, chi_eff, D_L) = m1_source^alpha * D_L^2
+    """
     standard_params = ['m1', 'm2', 'd_luminosity']
     range_dic = {'m1_source': NotImplemented,
                  'lnq': NotImplemented,
@@ -25,23 +42,24 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         
         # build an inverse spline for d_luminosity and d_hat
         # for future use
-        m2_source = m1_source * np.exp(lnq)
         # some reasonable values for the distance range 
         # - should be checked later
-        d_luminosity_grid = np.linspace(1., 100000., 10000)
+        d_luminosity_grid = np.linspace(0., 1000000., 10000)
         f_grid = self._f_of_d_luminosity(d_luminosity_grid) 
+        self.fmax = max(f_grid)
         self._d_luminosity_of_f = interpolate.interp1d(f_grid, d_luminosity_grid)
         
         self.tgps = tgps
-        self.ref_det_name=ref_det_name
+        self.ref_det_name = ref_det_name
         super().__init__(tgps=tgps, ref_det_name=ref_det_name, **kwargs)
 
     
-    def _f_of_d_luminosity(self, d_luminosity):
+    @staticmethod
+    def _f_of_d_luminosity(d_luminosity):
         """
         function for f(d_L) = d_L / (1+z)^(5/6)
         """
-        redshift = cosmology.z_of_luminosity( d_luminosity)
+        redshift = cosmology.z_of_d_luminosity(d_luminosity)
         return d_luminosity / (1+redshift)**(5/6)
         
         
@@ -69,12 +87,14 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         to go from sampled params to standard params
         """
         
-        m2_source = m1_source * np.exp(lnq)
+        m2_source = m1_source * np.exp(-np.abs(lnq))
         mchirp_source = gw_utils.m1m2_to_mchirp(m1_source, m2_source)
-        R_k = _response_factor(ra, dec, psi, iota)
+        R_k = self._response_factor(ra, dec, psi, iota)
         func_val = d_hat * mchirp_source**(5/6) * R_k
         # use inverse spline here
-        d_luminosity = self._d_luminosity_of_f(func_val)
+        if func_val>self.fmax:
+            print(mchirp_source, R_k, m1_source, lnq, d_hat, ra, dec, psi, iota)
+        d_luminosity = self._d_luminosity_of_f(func_val)[()]
         redshift = cosmology.z_of_d_luminosity(d_luminosity)
         m1 = m1_source * (1+redshift)
         
@@ -123,9 +143,42 @@ class InjectionMassPrior(ReferenceDetectorMixin, Prior):
         # individual prior probability density : uniform in mass ratio
         lnprior_lnq = lnq
         # individual prior probability density : power law in luminosity distance
-        lnprior_d_hat = np.log(d_luminosity**3 / d_hat) 
+        lnprior_d_hat = np.log(d_luminosity**3 / d_hat
+                                  * comoving_to_luminosity_diff_vt_ratio(d_luminosity))
         # joint probability density
         lnprior_tot = lnprior_m1_source + lnprior_lnq + lnprior_d_hat
         
         return lnprior_tot 
+    
+    def get_init_dict(self):
+        """
+        Return dictionary with keyword arguments to reproduce the class
+        instance.
+        """
+        return  {'tgps': self.tgps, 
+                 'ref_det_name': self.ref_det_name, 
+                 'm1_source_range': self.range_dic['m1_source'], 
+                 'alpha': self.alpha,
+                 'q_min': self.range_dic['lnq'][0], 
+                 'd_hat_max': self.range_dic['d_hat'][1],
+                 'symmetrize_lnq': self.range_dic['lnq'][1] != 0}
+            
         
+        
+class PopulationPrior(RegisteredPriorMixin, CombinedPrior):
+    """
+    Prior class for sampling from an astrophysical mass/spin distribution
+    following Roulet et al, https://arxiv.org/pdf/2008.07014.pdf
+    """
+    prior_classes = [IsotropicInclinationPrior,
+                     IsotropicSkyLocationPrior,
+                     UniformTimePrior,
+                     UniformPolarizationPrior,
+                     UniformPhasePrior,
+                     InjectionMassPrior,
+                     UniformEffectiveSpinPrior,
+                     ZeroInplaneSpinsPrior,
+                     ZeroTidalDeformabilityPrior,
+                     FixedReferenceFrequencyPrior]
+
+       

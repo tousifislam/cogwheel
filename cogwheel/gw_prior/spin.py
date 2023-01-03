@@ -245,3 +245,72 @@ class ZeroInplaneSpinsPrior(FixedPrior):
                         's1y_n': 0,
                         's2x_n': 0,
                         's2y_n': 0}
+
+    
+class IsotropicHighSpinsAlignedComponentsPrior(UniformPriorMixin, Prior):
+    """
+    Spin prior for aligned spin components that can be combined with
+    IsotropicSpinsInplaneComponentsPrior to give constituent spin priors
+    that are independently uniform in magnitude and solid angle.
+    The sampled parameters are `cums1z` and `cums2z`, both from U(0, 1).
+    """
+    standard_params = ['s1z', 's2z']
+    range_dic = {'cums1z': (0, 1),
+                 'cums2z': (0, 1)}
+    # Spin coordinates that are convenient for the
+    # LVC isotropic spin prior (0 <= cumsz <= 1)
+    sz_grid = np.linspace(-1, 1, 4000)
+    cumsz_grid = (1 + sz_grid - sz_grid * np.log(np.abs(sz_grid))) / 2
+    sz_interp = interp1d(cumsz_grid, sz_grid, bounds_error=True)
+
+    @classmethod
+    def _spin_transform(cls, cumsz):
+        return cls.sz_interp(cumsz)[()]
+
+    def transform(self, cums1z, cums2z):
+        """(cums1z, cums2z) to (s1z, s2z)."""
+        return {'s1z': self._spin_transform(cums1z),
+                's2z': self._spin_transform(cums2z)}
+
+    @staticmethod
+    def _inverse_spin_transform(sz):
+        return (1 + sz - sz * np.log(np.abs(sz))) / 2
+
+    def inverse_transform(self, s1z, s2z):
+        """(s1z, s2z) to (cums1z, cums2z)."""
+        return {'cums1z': self._inverse_spin_transform(s1z),
+                'cums2z': self._inverse_spin_transform(s2z)}
+    
+class IsotropicLowSpinsAlignedComponentsPrior(UniformPriorMixin, Prior):
+    """
+    Spin prior for aligned spin components that can be combined with
+    IsotropicSpinsInplaneComponentsPrior to give constituent spin priors
+    that are independently uniform in magnitude and solid angle.
+    The sampled parameters are `cums1z` and `cums2z`, both from U(0, 1).
+    """
+    standard_params = ['s1z', 's2z']
+    range_dic = {'cums1z': (0, 0.05),
+                 'cums2z': (0, 0.05)}
+    # Spin coordinates that are convenient for the
+    # LVC isotropic spin prior (0 <= cumsz <= 1)
+    sz_grid = np.linspace(-1, 1, 4000)
+    cumsz_grid = (1 + sz_grid - sz_grid * np.log(np.abs(sz_grid))) / 2
+    sz_interp = interp1d(cumsz_grid, sz_grid, bounds_error=True)
+
+    @classmethod
+    def _spin_transform(cls, cumsz):
+        return cls.sz_interp(cumsz)[()]
+
+    def transform(self, cums1z, cums2z):
+        """(cums1z, cums2z) to (s1z, s2z)."""
+        return {'s1z': self._spin_transform(cums1z),
+                's2z': self._spin_transform(cums2z)}
+
+    @staticmethod
+    def _inverse_spin_transform(sz):
+        return (1 + sz - sz * np.log(np.abs(sz))) / 2
+
+    def inverse_transform(self, s1z, s2z):
+        """(s1z, s2z) to (cums1z, cums2z)."""
+        return {'cums1z': self._inverse_spin_transform(s1z),
+                'cums2z': self._inverse_spin_transform(s2z)}
