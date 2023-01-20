@@ -1,6 +1,5 @@
 import sys
 sys.path.append('/data/tislam/works/KITP/repos/cogwheel/')
-from cogwheel import _private_ias
 sys.path.append('/data/tislam/works/KITP/repos/fast_pe_using_cs/')
 import coherent_score_mz_fast_tousif as cs
 import numpy as np

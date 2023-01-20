@@ -1,0 +1,22 @@
+python=3.9
+gsl=2.7.0
+numpy
+scipy
+swig
+h5py
+pkg-config
+matplotlib
+# multiprocess
+# numba
+pandas
+ipykernel
+python-lal
+python-lalsimulation
+pymultinest
+dynesty
+ipywidgets
+notebook
+pyarrow
+astropy
+gwpy
+numba

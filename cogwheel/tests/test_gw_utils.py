@@ -3,8 +3,7 @@
 from unittest import TestCase, main
 import numpy as np
 
-from cogwheel.gw_utils import fplus_fcross
-from cogwheel.skyloc_angles import DETECTORS
+from cogwheel.gw_utils import fplus_fcross, DETECTORS
 
 
 class PolarizationTestCase(TestCase):
@@ -26,8 +25,8 @@ class PolarizationTestCase(TestCase):
         psi = np.random.uniform(0, np.pi)
         tgps = np.random.uniform(1e9)
 
-        fp_fc = fplus_fcross(DETECTORS, ra, dec, psi, tgps)
-        fp0_fc0 = fplus_fcross(DETECTORS, ra, dec, 0, tgps)
+        fp_fc = fplus_fcross(tuple(DETECTORS), ra, dec, psi, tgps)
+        fp0_fc0 = fplus_fcross(tuple(DETECTORS), ra, dec, 0, tgps)
 
         psi_rotation = np.array([[np.cos(2*psi), np.sin(2*psi)],
                                  [-np.sin(2*psi), np.cos(2*psi)]])

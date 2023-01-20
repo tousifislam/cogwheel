@@ -3,6 +3,7 @@
 import abc
 import argparse
 import datetime
+import inspect
 import pathlib
 import os
 import sys
@@ -13,12 +14,13 @@ import numpy as np
 import pandas as pd
 import scipy.special
 
+import dynesty
 import pymultinest
 # import ultranest
 # import ultranest.stepsampler
 
-from . import postprocessing
-from . import utils
+from cogwheel import postprocessing
+from cogwheel import utils
 
 SAMPLES_FILENAME = 'samples.feather'
 FINISHED_FILENAME = 'FINISHED.out'
@@ -27,6 +29,14 @@ class Sampler(abc.ABC, utils.JSONMixin):
     """
     Generic base class for sampling distributions.
     Subclasses implement the interface with specific sampling codes.
+
+    Parameter space folding is used; this means that some ("folded")
+    dimensions are sampled over half their original range, and a map to
+    the other half of the range is defined by reflecting or shifting
+    about the midpoint. The folded posterior distribution is defined as
+    the sum of the original posterior over all `2**n_folds` mapped
+    points. This is intended to reduce the number of modes in the
+    posterior.
     """
     DEFAULT_RUN_KWARGS = {}  # Implemented by subclasses
     PROFILING_FILENAME = 'profiling'
@@ -125,50 +135,43 @@ class Sampler(abc.ABC, utils.JSONMixin):
                                  for rundir in old_rundirs)
         return eventdir.joinpath(f'{utils.RUNDIR_PREFIX}{run_id}')
 
-    def submit_slurm(self, rundir, n_hours_limit=48,
-                     memory_per_task='32G', resuming=False):
+    def submit_slurm(
+            self, rundir, n_hours_limit=48, memory_per_task='32G',
+            resuming=False, sbatch_cmds=()):
         """
         Parameters
         ----------
-        rundir: path of run directory, e.g. from `self.get_rundir`
-        n_hours_limit: Number of hours to allocate for the job
-        memory_per_task: Determines the memory and number of cpus
-        resuming: bool, whether to attempt resuming a previous run if
-                  rundir already exists.
+        rundir: str, os.PathLike
+            Run directory, e.g. from `self.get_rundir`
+
+        n_hours_limit: int
+            Number of hours to allocate for the job.
+
+        memory_per_task: str
+            Determines the memory and number of cpus.
+
+        resuming: bool
+            Whether to attempt resuming a previous run if rundir already
+            exists.
+
+        sbatch_cmds: tuple of str
+            Strings with SBATCH commands.
         """
         rundir = pathlib.Path(rundir)
-        job_name = '_'.join([self.__class__.__name__,
-                             self.posterior.prior.__class__.__name__,
+        job_name = '_'.join([rundir.name,
                              self.posterior.likelihood.event_data.eventname,
-                             rundir.name])
+                             self.posterior.prior.__class__.__name__,
+                             self.__class__.__name__])
+        batch_path = rundir/'batchfile'
         stdout_path = rundir.joinpath('output.out').resolve()
         stderr_path = rundir.joinpath('errors.err').resolve()
 
         self.to_json(rundir, overwrite=resuming)
 
-        package = pathlib.Path(__file__).parents[1].resolve()
-        module = f'cogwheel.{os.path.basename(__file__)}'.rstrip('.py')
-
-        batch_path = rundir/'batchfile'
-        with open(batch_path, 'w+') as batchfile:
-            batchfile.write(textwrap.dedent(f"""\
-                #!/bin/bash
-                #SBATCH --job-name={job_name}
-                #SBATCH --output={stdout_path}
-                #SBATCH --error={stderr_path}
-                #SBATCH --open-mode=append
-                #SBATCH --mem-per-cpu={memory_per_task}
-                #SBATCH --time={n_hours_limit:02}:00:00
-
-                eval "$(conda shell.bash hook)"
-                conda activate {os.environ['CONDA_DEFAULT_ENV']}
-
-                cd {package}
-                srun {sys.executable} -m {module} {rundir.resolve()}
-                """))
-        batch_path.chmod(0o777)
-        os.system(f'sbatch {batch_path.resolve()}')
-        print(f'Submitted job {job_name!r}.')
+        sbatch_cmds += (f'--mem-per-cpu={memory_per_task}',)
+        args = rundir.resolve()
+        utils.submit_slurm(job_name, n_hours_limit, stdout_path, stderr_path,
+                           args, sbatch_cmds, batch_path)
 
     def submit_lsf(self, rundir, n_hours_limit=48,
                    memory_per_task='32G', resuming=False):
@@ -192,7 +195,7 @@ class Sampler(abc.ABC, utils.JSONMixin):
         self.to_json(rundir, overwrite=resuming)
 
         package = pathlib.Path(__file__).parents[1].resolve()
-        module = f'cogwheel.{os.path.basename(__file__)}'.rstrip('.py')
+        module = f'cogwheel.{os.path.basename(__file__)}'.removesuffix('.py')
 
         batch_path = rundir/'batchfile'
         with open(batch_path, 'w+') as batchfile:
@@ -210,7 +213,7 @@ class Sampler(abc.ABC, utils.JSONMixin):
                 srun {sys.executable} -m {module} {rundir.resolve()}
                 """))
         batch_path.chmod(0o777)
-        os.system(f'sbatch {batch_path.resolve()}')
+        os.system(f'bsub < {batch_path.resolve()}')
         print(f'Submitted job {job_name!r}.')
 
     @abc.abstractmethod
@@ -225,7 +228,6 @@ class Sampler(abc.ABC, utils.JSONMixin):
         ----------
         rundir: directory where to save output, will create if needed.
         """
-
         rundir = pathlib.Path(rundir)
         self.to_json(rundir, dir_permissions=self.dir_permissions,
                      file_permissions=self.file_permissions, overwrite=True)
@@ -236,7 +238,11 @@ class Sampler(abc.ABC, utils.JSONMixin):
                 fobj.write(f'{exit_code}\n{datetime.datetime.now()}')
         profiler.dump_stats(rundir/self.PROFILING_FILENAME)
 
-        self.load_samples().to_feather(rundir/SAMPLES_FILENAME)
+        samples = self.load_samples()
+        self.posterior.prior.transform_samples(samples)
+        self.posterior.likelihood.postprocess_samples(samples)
+
+        samples.to_feather(rundir/SAMPLES_FILENAME)
 
         for path in rundir.iterdir():
             path.chmod(self.file_permissions)
@@ -323,7 +329,7 @@ class PyMultiNest(Sampler):
     def _lnprob_pymultinest(self, par_vals, *_):
         """
         Update the extra entries `par_vals[n_dim : n_params+1]` with the
-        log posterior evaulated at each unfold. Return the logarithm of
+        log posterior evaluated at each unfold. Return the logarithm of
         the folded posterior.
         """
         lnprobs = self._get_lnprobs(*[par_vals[i] for i in range(self._ndim)])
@@ -344,6 +350,70 @@ class PyMultiNest(Sampler):
         """
         self.run_kwargs['outputfiles_basename'] = os.path.join(dirname, '')
         super().to_json(dirname, *args, **kwargs)
+
+
+class Dynesty(Sampler):
+    """Sample a posterior or prior using ``dynesty``."""
+    DEFAULT_RUN_KWARGS = {}
+
+    @wraps(Sampler.__init__)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sampler = None
+
+    def _run(self):
+        periodic = [self.posterior.prior.sampled_params.index(par)
+                    for par in self.posterior.prior.periodic_params]
+        reflective = [self.posterior.prior.sampled_params.index(par)
+                      for par in self.posterior.prior.reflective_params]
+
+        sampler_keys = (
+            set(inspect.signature(dynesty.DynamicNestedSampler).parameters)
+            & self.run_kwargs.keys())
+        sampler_kwargs = {par: self.run_kwargs[par] for par in sampler_keys}
+
+        run_keys = self.run_kwargs.keys() - sampler_keys
+        run_kwargs = {par: self.run_kwargs[par] for par in run_keys}
+
+        self.sampler = dynesty.DynamicNestedSampler(
+            self._lnprob_dynesty,
+            self._cubetransform,
+            len(self.posterior.prior.sampled_params),
+            rstate=np.random.default_rng(0),
+            periodic=periodic or None,
+            reflective=reflective or None,
+            sample='rwalk',
+            **sampler_kwargs)
+        self.sampler.run_nested(**run_kwargs)
+
+    def load_samples(self):
+        """
+        Collect dynesty samples, resample from them to undo the
+        parameter folding. Return a ``pandas.DataFrame`` with samples.
+        """
+        folded = pd.DataFrame(self.sampler.results.samples,
+                              columns=self.posterior.prior.sampled_params)
+
+        # ``dynesty`` doesn't allow to save samples' metadata, so we
+        # have to recompute ``lnprobs``:
+        lnprobs = pd.DataFrame(
+            [self._get_lnprobs(**row) for _, row in folded.iterrows()],
+            columns=self._lnprob_cols)
+        utils.update_dataframe(folded, lnprobs)
+
+        samples = self.resample(folded)
+        samples[utils.WEIGHTS_NAME] = np.exp(
+            self.sampler.results.logwt - self.sampler.results.logwt.max())
+        return samples
+
+    def _lnprob_dynesty(self, par_vals):
+        """Return the logarithm of the folded probability density."""
+        return scipy.special.logsumexp(self._get_lnprobs(*par_vals))
+
+    def _cubetransform(self, cube):
+        return (self.posterior.prior.cubemin
+                + cube * self.posterior.prior.folded_cubesize)
+
 
 # class Ultranest(Sampler):
 #     """

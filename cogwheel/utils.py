@@ -1,5 +1,6 @@
 """Utility functions."""
 
+import functools
 import importlib
 import inspect
 import json
@@ -11,10 +12,13 @@ import tempfile
 import textwrap
 import numpy as np
 from scipy.optimize import _differentialevolution
+from numba import njit, vectorize
 
 
 DIR_PERMISSIONS = 0o755
 FILE_PERMISSIONS = 0o644
+
+WEIGHTS_NAME = 'weights'
 
 
 class ClassProperty:
@@ -60,7 +64,114 @@ class _DifferentialEvolutionSolverWithGuesses(
         self.init_population_array(population)
 
 
-def merge_dictionaries_safely(dics):
+cached_functions_registry = []
+
+
+def lru_cache(*args, **kwargs):
+    """
+    Decorator like `functools.lru_cache` that also registers the
+    decorated function in ``cached_functions_registry`` so all caches
+    can easily be cleared with ``clear_caches()``.
+    """
+    def decorator(function):
+        function = functools.lru_cache(*args, **kwargs)(function)
+        cached_functions_registry.append(function)
+        return function
+    return decorator
+
+
+def clear_caches():
+    """
+    Clear caches of functions decorated with ``lru_cache``.
+    """
+    for function in cached_functions_registry:
+        function.cache_clear()
+
+
+def mod(value, start=0, period=2*np.pi):
+    """
+    Modulus operation, generalized so that the domain of the output can
+    be specified.
+    """
+    return (value - start) % period + start
+
+
+def weighted_std(values, weights=None):
+    """Return standard deviation of values with weights."""
+    avg = np.average(values, weights=weights)
+    return np.sqrt(np.average((values - avg) ** 2, weights=weights))
+
+
+def n_effective(weights):
+    """Return effective sample size."""
+    return np.sum(weights)**2 / np.sum(weights**2)
+
+
+def resample_equal(samples, weights_col=WEIGHTS_NAME, num=None):
+    """
+    Draw `num` samples from a DataFrame of weighted samples, so that the
+    resulting samples have equal weights.
+    Note: in general this does not produce independent samples, they may
+    be repeated.
+
+    Parameters
+    ----------
+    samples: pandas.DataFrame
+        Rows correspond to samples from a distribution.
+
+    weights_col: str
+        Name of a column in `samples` to interpret as weights.
+
+    num: int
+        Length of the returned DataFrame, defaults to ``len(samples)``.
+
+    Return
+    ------
+    equal_samples: pandas.DataFrame
+        Contains `num` rows with equal-weight samples. The columns match
+        those of `samples` except that `weights_col` is deleted.
+    """
+    if num is None:
+        num = len(samples)
+    weights = samples[weights_col]
+    weights /= weights.sum()
+    inds = np.random.choice(len(samples), num, p=weights)
+    samples_equal = samples.iloc[inds].reset_index()
+    del samples_equal[weights_col]
+    return samples_equal
+
+
+@njit
+def rand_choice_nb(arr, cprob, nvals):
+    """
+    Sample randomly from a list of probabilities
+
+    Parameters
+    ----------
+    arr: np.ndarray
+        A nD numpy array of values to sample from
+
+    cprob: np.arrray
+        A 1D numpy array of cumulative probabilities for the given samples
+
+    nvals: int
+        Number of samples desired
+
+    Return
+    ------
+    nvals random samples from the given array with the given probabilities
+    """
+    rsamps = np.random.random(size=nvals)
+    return arr[np.searchsorted(cprob, rsamps, side="right")]
+
+
+@vectorize(nopython=True)
+def abs_sq(x):
+    """x.real^2 + x.imag^2"""
+    return (x.real ** 2) + (x.imag ** 2)
+
+
+def merge_dictionaries_safely(*dics):
     """
     Merge multiple dictionaries into one.
     Accept repeated keys if values are consistent, otherwise raise
@@ -75,13 +186,65 @@ def merge_dictionaries_safely(dics):
     return merged
 
 
+def checkempty(array, verbose=False):
+    # First deal with irritating case when we can't make a numpy array
+    if hasattr(array, "__len__"):
+        # Deal with even more irritating edge case when the attribute exists,
+        # but throws an error when queried
+        try:
+            if len(array) > 0:
+                return False
+        except TypeError:
+            if verbose:
+                print("Object has `len' attribute that can't be queried")
+            return True
+    nparray = np.asarray(array)
+    if (((nparray is None) or
+         (nparray.dtype == np.dtype('O'))) or (nparray.size == 0)):
+        return True
+    else:
+        return False
+
+
+def rm_suffix(string, suffix='.json', new_suffix=None):
+    """
+    Removes suffix from string if present, and appends a new suffix if
+    requested.
+
+    Parameters
+    ----------
+    string: Input string to modify.
+    suffix: Suffix to remove if present.
+    new_suffix: Suffix to add.
+    """
+    if string.endswith(suffix):
+        outstr = string[:-len(suffix)]
+    else:
+        outstr = string
+    if new_suffix is not None:
+        outstr += new_suffix
+    return outstr
+
+
 def update_dataframe(df1, df2):
     """
     Modify `df1` in-place by adding the columns from `df2`, where `df1`
     and `df2` are pandas `DataFrame` objects.
+    Caution: if (some of) the columns of `df1` are also in `df2` they
+    get silently overwritten without checking for consistency.
     """
     for col, values in df2.iteritems():
         df1[col] = values
+
+
+def replace(sequence, old, new):
+    """
+    Return a list like `sequence` with the first occurrence of `old`
+    replaced by `new`.
+    """
+    out = list(sequence)
+    out[out.index(old)] = new
+    return out
 
 
 def submit_slurm(job_name, n_hours_limit, stdout_path, stderr_path,
@@ -94,21 +257,34 @@ def submit_slurm(job_name, n_hours_limit, stdout_path, stderr_path,
 
     Parameters
     ----------
-    job_name: string, name of slurm job
-    n_hours_limit: int, number of hours to allocate for the job.
-    stdout_path: file name, where to direct stdout.
-    stderr_path: file name, where to direct stderr.
-    args: string, command line arguments for the calling module's
-          `main()` to parse.
-    sbatch_cmds: sequence of strings with SBATCH commands, e.g.
-                 `('--mem-per-cpu=8G',)`
-    batch_path: file name where to save the batch script. If not
-                provided, a temporary file will be used.
+    job_name: str
+        Name of slurm job.
+
+    n_hours_limit: int
+        Number of hours to allocate for the job.
+
+    stdout_path: str, os.PathLike
+        File name, where to direct stdout.
+
+    stderr_path: str, os.PathLike
+        File name, where to direct stderr.
+
+    args: str
+        Command line arguments for the calling module's ``main()`` to
+        parse.
+
+    sbatch_cmds: sequence of str
+        SBATCH commands, e.g. ``('--mem-per-cpu=8G',)``.
+
+    batch_path: str, os.PathLike, optional
+        File name where to save the batch script. If not provided, a
+        temporary file will be used.
     """
     cogwheel_dir = pathlib.Path(__file__).parents[1].resolve()
     module = inspect.getmodule(inspect.stack()[1].frame).__name__
 
-    sbatch_lines = '\n'.join(f'#SBATCH {cmd}' for cmd in sbatch_cmds)
+    sbatch_lines = '\n        '.join(
+        f'#SBATCH {cmd}' for cmd in sbatch_cmds)
 
     batch_text = textwrap.dedent(
         f"""\
@@ -139,6 +315,7 @@ def submit_slurm(job_name, n_hours_limit, stdout_path, stderr_path,
         os.system(f'sbatch {os.path.abspath(batchfile.name)}')
 
     print(f'Submitted job {job_name!r}.')
+
 
 def submit_lsf(job_name, n_hours_limit, stdout_path, stderr_path,
                args='', bsub_cmds=(), batch_path=None):
@@ -239,7 +416,6 @@ def get_priordir(parentdir, prior_name):
                     └── <sampler_output_files>
     """
     return pathlib.Path(parentdir)/prior_name
-
 
 
 def mkdirs(dirname, dir_permissions=DIR_PERMISSIONS):
@@ -398,7 +574,6 @@ class CogwheelEncoder(NumpyEncoder):
     Encoder for classes in the `cogwheel` package that subclass
     `JSONMixin`.
     """
-
     def __init__(self, dirname=None, file_permissions=FILE_PERMISSIONS,
                  overwrite=False, **kwargs):
         super().__init__(**kwargs)
@@ -407,18 +582,25 @@ class CogwheelEncoder(NumpyEncoder):
         self.file_permissions = file_permissions
         self.overwrite = overwrite
 
+    @staticmethod
+    def _get_module_name(obj):
+        module = obj.__class__.__module__
+        if module == '__main__' and (spec := inspect.getmodule(obj).__spec__):
+            module = spec.name
+        return module
+
     def default(self, o):
         if o.__class__.__name__ == 'EventData':
             filename = os.path.join(self.dirname, f'{o.eventname}.npz')
             o.to_npz(filename=filename, overwrite=self.overwrite,
                      permissions=self.file_permissions)
             return {'__cogwheel_class__': o.__class__.__name__,
-                    '__module__': o.__class__.__module__,
+                    '__module__': self._get_module_name(o),
                     'filename': os.path.basename(filename)}
 
         if o.__class__.__name__ in class_registry:
             return {'__cogwheel_class__': o.__class__.__name__,
-                    '__module__': o.__class__.__module__,
+                    '__module__': self._get_module_name(o),
                     'init_kwargs': o.get_init_dict()}
 
         return super().default(o)
