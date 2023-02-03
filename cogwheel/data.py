@@ -176,8 +176,7 @@ class EventData(utils.JSONMixin):
                 'Length of `filenames` and `detector_names` are mismatched.')
 
         f_strain_whtfilter_tcoarses = []
-        for filename, fmin_ in np.transpose(np.broadcast_arrays(filenames,
-                                                                fmin)):
+        for filename, fmin_ in zip(*np.broadcast_arrays(filenames, fmin)):
             timeseries = cls._read_timeseries(filename, tgps)
             f_strain_whtfilter_tcoarses.append(
                 cls._get_f_strain_whtfilter_from_timeseries(
@@ -481,8 +480,8 @@ class EventData(utils.JSONMixin):
         plt.figtext(0., .5, 'Frequency (Hz)', rotation=90,
                     ha='left', va='center', fontsize='large')
 
-        colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm), pad=.03,
-                                ax=axes.tolist(), label=r'Power ($\sigma^2$)')
+        fig.colorbar(plt.cm.ScalarMappable(norm=norm), pad=.03,
+                     ax=axes.tolist(), label=r'Power ($\sigma^2$)')
 
     def to_npz(self, *, filename=None, overwrite=False,
                permissions=0o644):
