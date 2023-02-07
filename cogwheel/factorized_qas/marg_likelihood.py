@@ -267,8 +267,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
             self, samples, force_update=False, accurate_lnl=False, **kwargs):
         """
         Adds columns 'iota', 'psi', 'ra', 'dec', 'd_luminosity', 'phi_ref',
-        't_geocenter', 'lnl' to a DataFrame of samples, with values taken
-        randomly from the conditional posteriors
+        't_geocenter', 'lnl', 'coherent_score' to a DataFrame of samples, with values 
+        taken randomly from the conditional posteriors
         `samples` needs to have columns for all `self.params`.
 
         Parameters
@@ -296,7 +296,8 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
                        'd_luminosity',
                        'phi_ref',
                        't_geocenter',
-                       'lnl']
+                       'lnl',
+                       'coherent_score']
         if (not force_update) and (set(cols_to_add) <= set(samples.columns)):
             return
 
@@ -316,8 +317,9 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
         Given a set of intrinsic params in par_dic, this function returns
         particular values for 'iota', 'psi', 'ra', 'dec', 'd_luminosity',
         'phi_ref', and 't_geocenter' from their conditional posteriors, and
-        additionally computes the lnl (unmarginalized) for these extrinsic
-        samples
+        additionally computes the lnl (unmarginalized) and coherent_score 
+        (log of the marginalized likelihood) for these extrinsic samples
+        
         The accurate_lnl flag, if true, forces the lnl to be computed without
         discreteness artifacts. Note that the sampled lnl has discreteness
         artifacts, so if reweighting, use accurate_lnl=False
@@ -372,7 +374,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
             Y_pick = (self.dist_ref / d_luminosity) * np.exp(2 * 1j * phi_ref)
             lnl = (np.abs(U) ** 2 / T2 - T2 * np.abs(Y_pick - U / T2) ** 2) / 2
 
-        return iota, psi, ra, dec, d_luminosity, phi_ref, t_geocenter, lnl
+        return iota, psi, ra, dec, d_luminosity, phi_ref, t_geocenter, lnl, coherent_score
 
     def get_distance_phase_point_for_given_U_T2(self, U, T2):
         """
@@ -413,6 +415,7 @@ class MarginalizedRelativeBinningLikelihood(RelativeBinningLikelihood):
 
         return dist_pick, phi_pick
 
+    # TODO : add f1 and f2 back to make it self consistent 
     @staticmethod
     def posterior_func_for_dist(u_pr, u_abs, T2):
         """
